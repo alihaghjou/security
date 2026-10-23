@@ -13,9 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "SecureFlow — Intelligent Cybersecurity Platform",
+  title: "SecureFlow — AI-Powered Cybersecurity & Vulnerability Assistant",
   description:
-    "From security alerts to security confidence. Intelligent incident detection, routing, and resolution for modern organizations.",
+    "Know what's vulnerable. Know what to update. Know how to fix it. Autonomous software vulnerability intelligence for personal applications and developer projects.",
   icons: {
     icon: "/favicon.ico",
   },

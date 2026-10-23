@@ -1,49 +1,32 @@
 import React from "react";
-import { AlertOctagon, AlertTriangle, AlertCircle, Info, ShieldAlert } from "lucide-react";
-import { SEVERITY_CONFIG, type IncidentSeverity } from "@/lib/constants";
-import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
+
+export type SeverityLevel = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "INFORMATIONAL";
 
 interface SeverityBadgeProps {
-  severity: IncidentSeverity | string;
-  useUserLabel?: boolean;
+  severity: SeverityLevel | string;
   className?: string;
 }
 
-export function SeverityBadge({
-  severity,
-  useUserLabel = false,
-  className,
-}: SeverityBadgeProps) {
-  const normSeverity = (severity?.toUpperCase() || "INFORMATIONAL") as IncidentSeverity;
-  const config = SEVERITY_CONFIG[normSeverity] || SEVERITY_CONFIG.INFORMATIONAL;
+export function SeverityBadge({ severity, className = "" }: SeverityBadgeProps) {
+  const sevUpper = (severity || "LOW").toUpperCase();
 
-  const IconComponent = () => {
-    switch (config.icon) {
-      case "AlertOctagon":
-        return <AlertOctagon className="w-3.5 h-3.5" />;
-      case "AlertTriangle":
-        return <AlertTriangle className="w-3.5 h-3.5" />;
-      case "AlertCircle":
-        return <AlertCircle className="w-3.5 h-3.5" />;
-      case "Info":
-        return <Info className="w-3.5 h-3.5" />;
-      default:
-        return <ShieldAlert className="w-3.5 h-3.5" />;
-    }
+  const styles: Record<string, string> = {
+    CRITICAL: "bg-red-500/20 text-red-300 border-red-500/40",
+    HIGH: "bg-orange-500/20 text-orange-300 border-orange-500/40",
+    MEDIUM: "bg-amber-500/20 text-amber-300 border-amber-500/40",
+    LOW: "bg-blue-500/20 text-blue-300 border-blue-500/40",
+    INFORMATIONAL: "bg-slate-800 text-slate-300 border-slate-700",
   };
 
-  const text = useUserLabel ? config.userLabel : config.label;
+  const currentStyle = styles[sevUpper] || styles.LOW;
 
   return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border backdrop-blur-sm",
-        config.badgeClass,
-        className
-      )}
+    <Badge
+      variant="outline"
+      className={`text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 ${currentStyle} ${className}`}
     >
-      <IconComponent />
-      <span>{text}</span>
-    </span>
+      {sevUpper}
+    </Badge>
   );
 }
