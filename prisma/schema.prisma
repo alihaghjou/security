@@ -1,0 +1,562 @@
+// =============================================================================
+// SecureFlow - Prisma Schema
+// Intelligent Cybersecurity Platform
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================================================
+// Enums
+// =============================================================================
+
+enum UserRole {
+  USER
+  TECHNICIAN
+  ADMIN
+  MSSP_ADMIN
+}
+
+enum IncidentSeverity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+  INFORMATIONAL
+}
+
+enum IncidentStatus {
+  DETECTED
+  TRIAGED
+  ASSIGNED
+  ACKNOWLEDGED
+  INVESTIGATING
+  CONTAINED
+  RESOLVED
+  CLOSED
+  REOPENED
+}
+
+enum SecondaryStatus {
+  AWAITING_USER
+  ESCALATED
+  FALSE_POSITIVE
+}
+
+enum ThreatCategory {
+  IDENTITY
+  ENDPOINT
+  NETWORK
+  EMAIL
+  DATA
+  APPLICATION
+  CLOUD
+  PHYSICAL
+  OTHER
+}
+
+enum AssignmentStatus {
+  PENDING
+  ACKNOWLEDGED
+  IN_PROGRESS
+  COMPLETED
+  REASSIGNED
+  ESCALATED
+}
+
+enum NotificationType {
+  IN_APP
+  EMAIL
+  BROWSER_PUSH
+  SMS
+}
+
+enum EventSource {
+  WEBHOOK
+  SIMULATOR
+  MANUAL
+  INTEGRATION
+}
+
+// =============================================================================
+// Models
+// =============================================================================
+
+/// Multi-tenant organization (customer account)
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  domain    String?
+  plan      String   @default("free")
+  settings  Json     @default("{}")
+  logo      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members                  OrganizationMember[]
+  technicianProfiles       TechnicianProfile[]
+  onCallSchedules          OnCallSchedule[]
+  integrations             Integration[]
+  securityEvents           SecurityEvent[]
+  incidents                Incident[]
+  escalationPolicies       EscalationPolicy[]
+  notificationPreferences  NotificationPreference[]
+  notifications            Notification[]
+  auditLogs                AuditLog[]
+  securityRecommendations  SecurityRecommendation[]
+
+  @@map("organizations")
+}
+
+/// Platform user (can belong to multiple organizations)
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String
+  passwordHash  String
+  avatarUrl     String?
+  emailVerified Boolean   @default(false)
+  lastLoginAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  memberships             OrganizationMember[]
+  technicianProfile       TechnicianProfile?
+  timelineEvents          TimelineEvent[]
+  investigationNotes      InvestigationNote[]
+  sentMessages            IncidentMessage[]
+  notificationPreferences NotificationPreference[]
+  notifications           Notification[]
+  auditLogs               AuditLog[]
+  securityRecommendations SecurityRecommendation[]
+  resolvedIncidents       IncidentResolution[]     @relation("ResolvedBy")
+  verifiedResolutions     IncidentResolution[]     @relation("VerifiedBy")
+  affectedSecurityEvents  SecurityEvent[]          @relation("AffectedUser")
+  affectedIncidents       Incident[]               @relation("AffectedUser")
+
+  @@index([email])
+  @@map("users")
+}
+
+/// Junction: User membership in an Organization with a specific role
+model OrganizationMember {
+  id             String   @id @default(cuid())
+  userId         String
+  organizationId String
+  role           UserRole @default(USER)
+  isActive       Boolean  @default(true)
+  joinedAt       DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+  @@index([userId])
+  @@map("organization_members")
+}
+
+/// Extended profile for users with the TECHNICIAN role
+model TechnicianProfile {
+  id                     String           @id @default(cuid())
+  userId                 String           @unique
+  organizationId         String
+  specializations        ThreatCategory[]
+  isAvailable            Boolean          @default(true)
+  isOnCall               Boolean          @default(false)
+  maxConcurrentIncidents Int              @default(5)
+  currentLoad            Int              @default(0)
+  createdAt              DateTime         @default(now())
+  updatedAt              DateTime         @updatedAt
+
+  user                User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization        Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  assignments         Assignment[]
+  onCallSchedules     OnCallSchedule[]
+  escalationPolicies  EscalationPolicy[] @relation("EscalationTarget")
+  escalationAttempts  EscalationAttempt[]
+
+  @@index([organizationId])
+  @@index([isAvailable, isOnCall])
+  @@map("technician_profiles")
+}
+
+/// Recurring on-call schedule entry for a technician
+model OnCallSchedule {
+  id             String   @id @default(cuid())
+  technicianId   String
+  organizationId String
+  dayOfWeek      Int      // 0=Sunday, 6=Saturday
+  startTime      String   // HH:mm format
+  endTime        String   // HH:mm format
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  technician   TechnicianProfile @relation(fields: [technicianId], references: [id], onDelete: Cascade)
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([technicianId])
+  @@map("on_call_schedules")
+}
+
+/// Third-party integration (SIEM, EDR, etc.) connected to an organization
+model Integration {
+  id            String    @id @default(cuid())
+  organizationId String
+  name          String
+  type          String
+  config        Json      @default("{}")
+  isActive      Boolean   @default(true)
+  webhookSecret String?
+  lastEventAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  securityEvents SecurityEvent[]
+
+  @@index([organizationId])
+  @@map("integrations")
+}
+
+/// Raw or normalized security event ingested from integrations or simulators
+model SecurityEvent {
+  id                    String           @id @default(cuid())
+  organizationId        String
+  integrationId         String?
+  source                EventSource      @default(WEBHOOK)
+  externalId            String?
+  category              ThreatCategory
+  rawData               Json             @default("{}")
+  normalizedTitle       String
+  normalizedDescription String?
+  severity              IncidentSeverity
+  sourceIp              String?
+  targetAsset           String?
+  affectedUserId        String?
+  receivedAt            DateTime         @default(now())
+  processedAt           DateTime?
+  incidentId            String?
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  integration  Integration? @relation(fields: [integrationId], references: [id], onDelete: SetNull)
+  incident     Incident?    @relation(fields: [incidentId], references: [id], onDelete: SetNull)
+  affectedUser User?        @relation("AffectedUser", fields: [affectedUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([incidentId])
+  @@index([severity])
+  @@index([category])
+  @@index([receivedAt])
+  @@index([externalId])
+  @@map("security_events")
+}
+
+/// Security incident created from one or more correlated events
+model Incident {
+  id                   String           @id @default(cuid())
+  organizationId       String
+  title                String
+  description          String?
+  plainLanguageSummary String?
+  severity             IncidentSeverity
+  status               IncidentStatus   @default(DETECTED)
+  secondaryStatus      SecondaryStatus?
+  category             ThreatCategory
+  affectedUserId       String?
+  detectedAt           DateTime         @default(now())
+  triagedAt            DateTime?
+  acknowledgedAt       DateTime?
+  containedAt          DateTime?
+  resolvedAt           DateTime?
+  closedAt             DateTime?
+  isDemo               Boolean          @default(false)
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+
+  organization       Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  affectedUser       User?                @relation("AffectedUser", fields: [affectedUserId], references: [id], onDelete: SetNull)
+  securityEvents     SecurityEvent[]
+  assignments        Assignment[]
+  escalationAttempts EscalationAttempt[]
+  timelineEvents     TimelineEvent[]
+  investigationNotes InvestigationNote[]
+  messages           IncidentMessage[]
+  notifications      Notification[]
+  resolution         IncidentResolution?
+
+  @@index([organizationId])
+  @@index([status])
+  @@index([severity])
+  @@index([category])
+  @@index([organizationId, status])
+  @@index([organizationId, severity])
+  @@index([detectedAt])
+  @@map("incidents")
+}
+
+/// Assignment of a technician to an incident
+model Assignment {
+  id             String           @id @default(cuid())
+  incidentId     String
+  technicianId   String
+  status         AssignmentStatus @default(PENDING)
+  assignedAt     DateTime         @default(now())
+  acknowledgedAt DateTime?
+  completedAt    DateTime?
+  notes          String?
+  isPrimary      Boolean          @default(true)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  incident           Incident            @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  technician         TechnicianProfile   @relation(fields: [technicianId], references: [id], onDelete: Cascade)
+  escalationAttempts EscalationAttempt[]
+
+  @@index([incidentId])
+  @@index([technicianId])
+  @@index([status])
+  @@map("assignments")
+}
+
+/// Organization-level policy defining escalation rules by severity
+model EscalationPolicy {
+  id                           String           @id @default(cuid())
+  organizationId               String
+  name                         String
+  severity                     IncidentSeverity
+  acknowledgmentDeadlineMinutes Int
+  escalationTargetId           String?
+  notifyAdmins                 Boolean          @default(true)
+  isActive                     Boolean          @default(true)
+  createdAt                    DateTime         @default(now())
+  updatedAt                    DateTime         @updatedAt
+
+  organization     Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  escalationTarget TechnicianProfile? @relation("EscalationTarget", fields: [escalationTargetId], references: [id], onDelete: SetNull)
+  attempts         EscalationAttempt[]
+
+  @@index([organizationId])
+  @@index([severity])
+  @@map("escalation_policies")
+}
+
+/// Record of an escalation attempt for an incident
+model EscalationAttempt {
+  id                 String    @id @default(cuid())
+  incidentId         String
+  assignmentId       String
+  policyId           String
+  attemptedAt        DateTime  @default(now())
+  targetTechnicianId String
+  wasAcknowledged    Boolean   @default(false)
+  acknowledgedAt     DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  incident         Incident          @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  assignment       Assignment        @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  policy           EscalationPolicy  @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  targetTechnician TechnicianProfile @relation(fields: [targetTechnicianId], references: [id], onDelete: Cascade)
+
+  @@index([incidentId])
+  @@index([assignmentId])
+  @@map("escalation_attempts")
+}
+
+/// Chronological event in an incident's timeline
+model TimelineEvent {
+  id              String   @id @default(cuid())
+  incidentId      String
+  timestamp       DateTime @default(now())
+  actorId         String?
+  actorName       String?
+  action          String
+  description     String?
+  statusFrom      String?
+  statusTo        String?
+  metadata        Json?
+  isVisibleToUser Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  incident Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  actor    User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([incidentId])
+  @@index([incidentId, timestamp])
+  @@map("timeline_events")
+}
+
+/// Internal or shared investigation note on an incident
+model InvestigationNote {
+  id         String   @id @default(cuid())
+  incidentId String
+  authorId   String
+  content    String
+  isInternal Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  incident Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  author   User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([incidentId])
+  @@index([authorId])
+  @@map("investigation_notes")
+}
+
+/// Chat message within an incident thread
+model IncidentMessage {
+  id         String   @id @default(cuid())
+  incidentId String
+  senderId   String
+  senderRole UserRole
+  content    String
+  isRead     Boolean  @default(false)
+  readAt     DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  incident Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  sender   User     @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([incidentId])
+  @@index([senderId])
+  @@map("incident_messages")
+}
+
+/// Per-user notification preference for a severity+channel combo
+model NotificationPreference {
+  id             String           @id @default(cuid())
+  userId         String
+  organizationId String
+  severity       IncidentSeverity
+  channel        NotificationType
+  isEnabled      Boolean          @default(true)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId, severity, channel])
+  @@index([userId])
+  @@index([organizationId])
+  @@map("notification_preferences")
+}
+
+/// Individual notification sent to a user
+model Notification {
+  id             String           @id @default(cuid())
+  userId         String
+  organizationId String
+  incidentId     String?
+  title          String
+  body           String
+  severity       IncidentSeverity
+  channel        NotificationType
+  isRead         Boolean          @default(false)
+  readAt         DateTime?
+  sentAt         DateTime         @default(now())
+  deliveredAt    DateTime?
+  failedAt       DateTime?
+  metadata       Json?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  incident     Incident?    @relation(fields: [incidentId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([incidentId])
+  @@index([userId, isRead])
+  @@map("notifications")
+}
+
+/// Immutable audit trail entry
+model AuditLog {
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String?
+  action         String
+  resource       String
+  resourceId     String?
+  details        Json?
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([userId])
+  @@index([action])
+  @@index([resource])
+  @@index([createdAt])
+  @@index([organizationId, createdAt])
+  @@map("audit_logs")
+}
+
+/// AI-generated or manual security recommendation for an organization/user
+model SecurityRecommendation {
+  id             String           @id @default(cuid())
+  organizationId String
+  userId         String?
+  title          String
+  description    String
+  priority       IncidentSeverity
+  category       String
+  isCompleted    Boolean          @default(false)
+  completedAt    DateTime?
+  isDismissed    Boolean          @default(false)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([userId])
+  @@index([priority])
+  @@map("security_recommendations")
+}
+
+/// Resolution details for a closed incident (1:1 with Incident)
+model IncidentResolution {
+  id              String    @id @default(cuid())
+  incidentId      String    @unique
+  resolvedById    String
+  summary         String
+  rootCause       String?
+  actionsTaken    String?
+  preventionSteps String?
+  verifiedAt      DateTime?
+  verifiedById    String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  incident   Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  resolvedBy User     @relation("ResolvedBy", fields: [resolvedById], references: [id], onDelete: Cascade)
+  verifiedBy User?    @relation("VerifiedBy", fields: [verifiedById], references: [id], onDelete: SetNull)
+
+  @@index([incidentId])
+  @@index([resolvedById])
+  @@map("incident_resolutions")
+}
